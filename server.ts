@@ -12,8 +12,24 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = 3000;
 
+// CORS & Options handling
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Favicon handler to avoid 404 warning in browser console
+app.get('/favicon.ico', (req, res) => {
+  res.status(204).end();
+});
 
 // Helper function to initialize Gemini AI lazily
 function getGeminiClient() {
@@ -270,6 +286,14 @@ app.post('/api/gas-proxy', async (req, res) => {
       error: error?.message || '구글 시트(GAS) 전송 중 서버 통신 오류가 발생했습니다.',
     });
   }
+});
+
+// Explicit 404 JSON handler for /api/* to ensure API requests always return JSON, never HTML
+app.all('/api/*', (req, res) => {
+  res.status(404).json({
+    success: false,
+    error: `요청하신 API 경로를 찾을 수 없습니다: ${req.method} ${req.originalUrl}`,
+  });
 });
 
 // Start dev server with Vite middleware or static dist server
