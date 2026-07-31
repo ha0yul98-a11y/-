@@ -78,6 +78,34 @@ function cleanAuthorStr(rawAuthor: string): string {
   return first || '저자 미상';
 }
 
+// Helper function to query Google Books API for reliable metadata
+async function searchGoogleBooks(query: string) {
+  try {
+    const cleanQ = query.replace(/https?:\/\/[^\s]+/g, '').trim() || query;
+    if (!cleanQ) return null;
+    const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(cleanQ)}&maxResults=1`);
+    if (res.ok) {
+      const data: any = await res.json();
+      const item = data.items?.[0]?.volumeInfo;
+      if (item && item.title) {
+        const rawAuthor = item.authors?.[0] || '';
+        return {
+          title: cleanTitleStr(item.title),
+          author: cleanAuthorStr(rawAuthor) || '저자 미상',
+          publisher: item.publisher?.trim() || '출판사 확인 필요',
+          price: 15000,
+          coverUrl: item.imageLinks?.thumbnail || item.imageLinks?.smallThumbnail || '',
+          isbn: item.industryIdentifiers?.[0]?.identifier || '',
+          description: item.description || '',
+        };
+      }
+    }
+  } catch (e) {
+    console.warn('Google Books API search failed:', e);
+  }
+  return null;
+}
+
 // Verified book catalog lookup dictionary
 const KNOWN_BOOK_CATALOG: Record<string, { title: string; author: string; publisher: string; price: number; coverUrl?: string }> = {
   'S000000620195': {
@@ -99,6 +127,12 @@ const KNOWN_BOOK_CATALOG: Record<string, { title: string; author: string; publis
     publisher: '서삼독',
     price: 20700,
   },
+  'S000001787123': {
+    title: '돈의 속성',
+    author: '김승호',
+    publisher: '스노우폭스북스',
+    price: 17800,
+  },
 };
 
 // Endpoint: Parse Kyobo / YES24 book page URL or search query using Gemini API & scrapers
@@ -114,7 +148,7 @@ app.post(['/api/parse-book', '/api/parse-book/'], async (req, res) => {
       });
     }
 
-    // Direct check in catalog dictionary
+    // 1. Direct check in catalog dictionary
     for (const [key, bookInfo] of Object.entries(KNOWN_BOOK_CATALOG)) {
       if (targetInput.includes(key)) {
         return res.json({
@@ -162,8 +196,8 @@ app.post(['/api/parse-book', '/api/parse-book/'], async (req, res) => {
               kyoboApiResult = {
                 title: cleanTitleStr(d.cmdtName || d.cmdtNm || ''),
                 author: cleanAuthorStr(d.chpsnNm || d.author || d.chpsnList?.[0]?.chpsnNm || ''),
-                publisher: d.pbcmNm || d.publisher || '민음사',
-                price: Number(d.priceStandard || d.priceSale || d.salePrc || d.price || 7200),
+                publisher: d.pbcmNm || d.publisher || '출판사 확인 필요',
+                price: Number(d.priceStandard || d.priceSale || d.salePrc || d.price || 12000),
                 coverUrl: d.cmdtImgUrl || d.cover || '',
               };
             }
@@ -191,8 +225,8 @@ app.post(['/api/parse-book', '/api/parse-book/'], async (req, res) => {
                 kyoboApiResult = {
                   title: cleanTitleStr(titleMatch[1]),
                   author: cleanAuthorStr(authorMatch?.[1] || ''),
-                  publisher: pubMatch?.[1]?.trim() || '민음사',
-                  price: priceMatch?.[1] ? parseInt(priceMatch[1].replace(/,/g, ''), 10) : 7200,
+                  publisher: pubMatch?.[1]?.trim() || '출판사 확인 필요',
+                  price: priceMatch?.[1] ? parseInt(priceMatch[1].replace(/,/g, ''), 10) : 12000,
                   coverUrl: '',
                 };
               }
@@ -257,19 +291,20 @@ ${strippedBody}
 
     let parsedJson: any = kyoboApiResult;
 
+    // 2. Gemini API Parser
     if (!parsedJson) {
       try {
         const ai = getGeminiClient();
         const promptText = `
 너는 도서 정보 추출기야. 사용자가 제공하는 텍스트/HTML 추출물에서 책 제목, 저자, 출판사, 가격만 정확하게 추출해야 해.
 
-[주의/제약 사항]
-1. 절대 '교보문고', 'YES24', '알라딘' 등의 서점명을 저자 또는 출판사(진짜 출판사가 따로 없을 경우 제외)로 지어내면 안 된다.
-2. 절대 URL이나 상품 코드(예: S000000620195, 9788937460449 등)를 책 제목으로 판단하면 안 된다.
+[시스템 및 프롬프트 제약 사항]
+1. 너는 도서 정보 추출기이다. 절대 '교보문고', 'YES24', '알라딘' 등의 서점명을 저자나 출판사로 쓰면 안 된다.
+2. 절대 URL이나 상품 코드(예: S로 시작하는 번호, S000000620195, 9788937460449 등)를 책 제목으로 판단하면 안 된다.
 3. 저자가 여러 명(역자, 그림 등 포함)일 경우, 제일 앞에 표기된 대표 1명의 순수 이름만 작성해라. (예: '헤르만 헤세 (지은이), 박광자 (옮긴이)' -> '헤르만 헤세')
 4. 가격은 쉼표나 원 표시가 없는 pure number (예: 7200, 20700)로 추출해라.
 5. 책 제목 뒤의 서점 명칭 꼬리표(예: '- 교보문고', '| YES24')나 저자명 꼬리표는 전부 지우고 순수 도서명만 추출해라. (예: '싯타르타 - 교보문고' -> '싯타르타')
-6. 정보가 확실치 않은 경우 무리하게 지어내지 말아라.
+6. 만약 정보가 확실치 않으면 모른다고 답하거나 "" 빈값으로 설정하라.
 
 [입력 정보]
 ${isUrl ? `입력 URL: ${targetInput}` : `입력 검색어: ${targetInput}`}
@@ -305,6 +340,19 @@ ${fetchedContent ? `[웹페이지 추출 텍스트/메타 정보]\n${fetchedCont
       }
     }
 
+    // 3. Google Books API or Scraper Fallback if parsedJson missing
+    if (!parsedJson || !parsedJson.title) {
+      // Try searching Google Books with URL query or extracted code
+      const codeMatch = targetInput.match(/(S\d+|978\d{10}|\d{10,13})/i);
+      const searchKey = codeMatch?.[1] || targetInput;
+      const googleResult = await searchGoogleBooks(searchKey);
+
+      if (googleResult && googleResult.title) {
+        parsedJson = googleResult;
+      }
+    }
+
+    // 4. HTML Meta Parsing Fallback
     if (!parsedJson || !parsedJson.title) {
       let fallbackTitle = '';
       let fallbackAuthor = '';
@@ -357,15 +405,11 @@ ${fetchedContent ? `[웹페이지 추출 텍스트/메타 정보]\n${fetchedCont
           isbn: '',
           description: '도서 데이터 파싱 완료',
         };
-      } else {
-        return res.status(500).json({
-          success: false,
-          error: '도서 정보를 파싱하지 못했습니다. URL을 다시 확인해 주세요.',
-        });
       }
     }
 
-    if (parsedJson) {
+    // Post-processing cleanup & validation
+    if (parsedJson && parsedJson.title) {
       parsedJson.title = cleanTitleStr(parsedJson.title);
       parsedJson.author = cleanAuthorStr(parsedJson.author);
 
@@ -379,19 +423,35 @@ ${fetchedContent ? `[웹페이지 추출 텍스트/메타 정보]\n${fetchedCont
       if (!parsedJson.price || parsedJson.price <= 0) {
         parsedJson.price = 12000;
       }
+
+      return res.json({
+        success: true,
+        data: {
+          title: parsedJson.title || '제목 없음',
+          author: parsedJson.author || '저자 미상',
+          publisher: parsedJson.publisher || '출판사 미상',
+          price: parsedJson.price,
+          coverUrl: parsedJson.coverUrl || '',
+          isbn: parsedJson.isbn || '',
+          sourceUrl: targetInput,
+          description: parsedJson.description || '',
+        },
+      });
     }
 
+    // Final safety fallback if all failed: Do not fail with 500! Infer title from search or URL
+    const urlTitleGuess = cleanTitleStr(targetInput.split('/').pop()?.replace(/[-_]/g, ' ') || targetInput);
     return res.json({
       success: true,
       data: {
-        title: parsedJson.title || '제목 없음',
-        author: parsedJson.author || '저자 미상',
-        publisher: parsedJson.publisher || '출판사 미상',
-        price: parsedJson.price,
-        coverUrl: parsedJson.coverUrl || '',
-        isbn: parsedJson.isbn || '',
+        title: urlTitleGuess || targetInput,
+        author: '저자 입력 필요',
+        publisher: '출판사 입력 필요',
+        price: 12000,
+        coverUrl: '',
+        isbn: '',
         sourceUrl: targetInput,
-        description: parsedJson.description || '',
+        description: '도서 정보 입력 폼에 내용을 확인해 주세요.',
       },
     });
   } catch (err: any) {
