@@ -1,8 +1,0 @@
-{
-  "name": "초등학교 도서 구매 관리",
-  "description": "교보문고·YES24 도서 링크 자동 파싱, 학년별 탭 수량 신청, 기존 보유 도서 중복 검사, 구글 시트 자동 취합 및 관리자 기능",
-  "requestFramePermissions": [],
-  "majorCapabilities": [
-    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
-  ]
-}
