@@ -100,8 +100,8 @@ export const LinkParserForm: React.FC<Props> = ({
 
       onShowToast(
         'info',
-        '도서 정보 입력 안내',
-        customMsg || '링크에서 상세 도서 정보를 직접 입력 또는 확인해 주세요.'
+        '도서 정보 입력 확인',
+        customMsg || '도서 정보 입력 폼이 준비되었습니다. 내용을 확인하신 후 등록해 주세요.'
       );
     };
 

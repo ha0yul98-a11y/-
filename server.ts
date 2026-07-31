@@ -261,37 +261,20 @@ ${strippedBody}
       try {
         const ai = getGeminiClient();
         const promptText = `
-너는 대한민국 인터넷 서점(교보문고, YES24, 알라딘 등)의 도서 상세 페이지 웹문서를 분석하는 AI 전문 파서이다.
-입력된 ${isUrl ? '도서 URL 및 HTML 웹페이지 추출 정보' : '도서 검색어/정보'}를 분석하여 상단에 위치한 핵심 도서 정보를 아래 규칙에 맞춰 완벽하게 파싱하라.
+너는 도서 정보 추출기야. 사용자가 제공하는 텍스트/HTML 추출물에서 책 제목, 저자, 출판사, 가격만 정확하게 추출해야 해.
 
+[주의/제약 사항]
+1. 절대 '교보문고', 'YES24', '알라딘' 등의 서점명을 저자 또는 출판사(진짜 출판사가 따로 없을 경우 제외)로 지어내면 안 된다.
+2. 절대 URL이나 상품 코드(예: S000000620195, 9788937460449 등)를 책 제목으로 판단하면 안 된다.
+3. 저자가 여러 명(역자, 그림 등 포함)일 경우, 제일 앞에 표기된 대표 1명의 순수 이름만 작성해라. (예: '헤르만 헤세 (지은이), 박광자 (옮긴이)' -> '헤르만 헤세')
+4. 가격은 쉼표나 원 표시가 없는 pure number (예: 7200, 20700)로 추출해라.
+5. 책 제목 뒤의 서점 명칭 꼬리표(예: '- 교보문고', '| YES24')나 저자명 꼬리표는 전부 지우고 순수 도서명만 추출해라. (예: '싯타르타 - 교보문고' -> '싯타르타')
+6. 정보가 확실치 않은 경우 무리하게 지어내지 말아라.
+
+[입력 정보]
 ${isUrl ? `입력 URL: ${targetInput}` : `입력 검색어: ${targetInput}`}
 
-${fetchedContent ? `[웹페이지 추출 정보]\n${fetchedContent}` : ''}
-
-[필수 항목 추출 및 정제 규칙]
-1. 도서명(title): 
-   - 순수한 도서 제목만 추출할 것 (부제 포함 가능).
-   - 서점 브랜드 꼬리표 (예: '- 교보문고', '| YES24', ' - 알라딘' 등) 및 '| 저자명' 등 뒤쪽 서점/저자 문구는 완전히 삭제할 것.
-   - 예시: '나의 첫번째 부동산 교과서 | 송희구 - 교보문고' -> '나의 첫번째 부동산 교과서'
-   - 예시: '싯타르타 - YES24' -> '싯타르타'
-
-2. 저자(author): 
-   - 저자가 여러 명(공저자, 역자, 그림작가 등)이 작성되어 있어도 **제일 앞에 있는 대표 1명의 이름만** 선택할 것.
-   - 뒤에 붙는 '지은이', '저', '외' 등의 직함 단어는 제거하고 순수 이름만 작성할 것.
-   - 예시: '송희구, 김철수, 이영희' -> '송희구'
-   - 예시: '헤르만 헤세 (지은이), 박광자 (옮긴이)' -> '헤르만 헤세'
-
-3. 출판사(publisher): 
-   - 출판사 이름만 명확하게 작성할 것 (예: '민음사', '서삼독', '김영사', '창비').
-
-4. 가격(price): 
-   - 도서의 정가 또는 판매가 중 원(₩) 단위의 **숫자만** 기재할 것 (예: 7200, 20700). 쉼표, '원', '₩' 표시는 포함하지 말 것.
-
-5. coverUrl: 추출된 도서 표지 이미지 URL (없으면 "").
-6. isbn: 13자리 또는 10자리 ISBN (없으면 "").
-7. description: 도서 소개 1문장.
-
-반드시 JSON 규격에 맞게 반환하라.
+${fetchedContent ? `[웹페이지 추출 텍스트/메타 정보]\n${fetchedContent}` : ''}
 `;
 
         const response = await ai.models.generateContent({
@@ -302,13 +285,13 @@ ${fetchedContent ? `[웹페이지 추출 정보]\n${fetchedContent}` : ''}
             responseSchema: {
               type: Type.OBJECT,
               properties: {
-                title: { type: Type.STRING, description: '순수 도서명' },
-                author: { type: Type.STRING, description: '제일 앞 1번째 대표 저자 이름' },
-                publisher: { type: Type.STRING, description: '출판사명' },
-                price: { type: Type.NUMBER, description: '정가/판매가(원 숫자만)' },
-                coverUrl: { type: Type.STRING, description: '표지 이미지 URL' },
-                isbn: { type: Type.STRING, description: 'ISBN' },
-                description: { type: Type.STRING, description: '도서 설명' },
+                title: { type: Type.STRING, description: '순수 도서 제목 (상품코드/서점명 제외)' },
+                author: { type: Type.STRING, description: '상단 1번째 대표 저자 이름만' },
+                publisher: { type: Type.STRING, description: '출판사 이름' },
+                price: { type: Type.NUMBER, description: '원 단위 가격 (숫자만)' },
+                coverUrl: { type: Type.STRING, description: '표지 이미지 URL (선택)' },
+                isbn: { type: Type.STRING, description: 'ISBN (선택)' },
+                description: { type: Type.STRING, description: '도서 요약' },
               },
               required: ['title', 'author', 'publisher', 'price'],
             },
