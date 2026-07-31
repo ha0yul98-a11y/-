@@ -103,10 +103,13 @@ ${strippedBody}
       }
     }
 
-    // Call Gemini API on server side
-    const ai = getGeminiClient();
+    // Call Gemini API on server side if available, or use regex fallback
+    let parsedJson: any = null;
+    let geminiErrorMsg = '';
 
-    const promptText = `
+    try {
+      const ai = getGeminiClient();
+      const promptText = `
 너는 대한민국 인터넷 서점(교보문고, YES24, 알라딘 등)의 도서 상세 페이지 정보를 정밀하게 분석하는 AI 파서이다.
 입력된 ${isUrl ? '도서 URL 및 HTML 웹페이지 추출 정보' : '도서 검색어/정보'}를 분석하여 정확한 도서명, 저자, 출판사, 정가(가격, 원 단위 숫자), 대표 커버 이미지 URL, ISBN을 파싱하여 JSON 형태로 추출하라.
 
@@ -126,37 +129,83 @@ ${fetchedContent ? `[웹페이지 추출 정보]\n${fetchedContent}` : ''}
 반드시 JSON 규격에 맞게 반환하라.
 `;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.6-flash',
-      contents: promptText,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            title: { type: Type.STRING, description: '도서명' },
-            author: { type: Type.STRING, description: '저자' },
-            publisher: { type: Type.STRING, description: '출판사' },
-            price: { type: Type.NUMBER, description: '정가(원)' },
-            coverUrl: { type: Type.STRING, description: '표지 이미지 URL' },
-            isbn: { type: Type.STRING, description: 'ISBN' },
-            description: { type: Type.STRING, description: '도서 설명' },
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.6-flash',
+        contents: promptText,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              title: { type: Type.STRING, description: '도서명' },
+              author: { type: Type.STRING, description: '저자' },
+              publisher: { type: Type.STRING, description: '출판사' },
+              price: { type: Type.NUMBER, description: '정가(원)' },
+              coverUrl: { type: Type.STRING, description: '표지 이미지 URL' },
+              isbn: { type: Type.STRING, description: 'ISBN' },
+              description: { type: Type.STRING, description: '도서 설명' },
+            },
+            required: ['title', 'author', 'publisher', 'price'],
           },
-          required: ['title', 'author', 'publisher', 'price'],
         },
-      },
-    });
-
-    const responseText = response.text || '';
-    let parsedJson: any = {};
-    try {
-      parsedJson = JSON.parse(responseText);
-    } catch (parseErr) {
-      console.error('Failed to parse Gemini JSON output:', responseText);
-      return res.status(500).json({
-        success: false,
-        error: 'Gemini 응답 결과를 JSON으로 변환하지 못했습니다.',
       });
+
+      const responseText = response.text || '';
+      parsedJson = JSON.parse(responseText);
+    } catch (err: any) {
+      console.warn('Gemini generation failed or key missing, attempting regex fallback:', err?.message);
+      geminiErrorMsg = err?.message || '';
+    }
+
+    // Fallback parsing if Gemini failed or key not configured
+    if (!parsedJson || !parsedJson.title) {
+      let fallbackTitle = '';
+      let fallbackAuthor = '';
+      let fallbackPublisher = '';
+      let fallbackPrice = 12000;
+      let fallbackCoverUrl = '';
+
+      if (fetchedContent) {
+        const ogTitleMatch = fetchedContent.match(/- OG Title: ([^\n]+)/);
+        const titleTagMatch = fetchedContent.match(/- Title Tag: ([^\n]+)/);
+        const ogImageMatch = fetchedContent.match(/- OG Image: ([^\n]+)/);
+
+        const rawTitle = ogTitleMatch?.[1] || titleTagMatch?.[1] || '';
+        if (rawTitle) {
+          // Clean common bookstore suffixes (e.g. "- 교보문고", "- YES24")
+          fallbackTitle = rawTitle
+            .replace(/ - (교보문고|YES24|알라딘|인터파크 도서).*/i, '')
+            .replace(/\| (교보문고|YES24|알라딘).*/i, '')
+            .trim();
+        }
+
+        if (ogImageMatch?.[1]) {
+          fallbackCoverUrl = ogImageMatch[1].trim();
+        }
+      }
+
+      if (!fallbackTitle && !isUrl) {
+        fallbackTitle = targetInput;
+      }
+
+      if (fallbackTitle) {
+        parsedJson = {
+          title: fallbackTitle,
+          author: fallbackAuthor || '저자 확인 필요',
+          publisher: fallbackPublisher || '출판사 확인 필요',
+          price: fallbackPrice,
+          coverUrl: fallbackCoverUrl,
+          isbn: '',
+          description: 'Gemini 키 미설정 또는 네트워크 폴백 추출 데이터입니다.',
+        };
+      } else {
+        return res.status(500).json({
+          success: false,
+          error: geminiErrorMsg
+            ? `Gemini API 오류: ${geminiErrorMsg}`
+            : '도서 정보를 분석하지 못했습니다. GEMINI_API_KEY 설정 및 URL을 확인해 주세요.',
+        });
+      }
     }
 
     return res.json({

@@ -78,7 +78,14 @@ export const LinkParserForm: React.FC<Props> = ({
         body: JSON.stringify({ url: urlInput.trim() }),
       });
 
-      const data = await res.json();
+      let data: any = {};
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const textResp = await res.text();
+        throw new Error(`서버 응답 오류 (${res.status}): ${textResp.slice(0, 100)}`);
+      }
 
       if (!res.ok || !data.success) {
         throw new Error(data.error || '도서 정보를 파싱하지 못했습니다.');
