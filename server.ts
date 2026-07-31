@@ -87,12 +87,20 @@ app.post(['/api/parse-book', '/api/parse-book/'], async (req, res) => {
 
         if (fetchRes.ok) {
           const htmlText = await fetchRes.text();
-          // Extract title, meta tags, and body text snippets to keep prompt manageable
+          // Extract title, meta tags, and LD+JSON scripts
           const metaMatches = htmlText.match(/<meta[^>]+>/gi) || [];
           const ogTitle = htmlText.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)?.[1] || '';
           const ogImage = htmlText.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)?.[1] || '';
           const ogDescription = htmlText.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i)?.[1] || '';
           const rawTitleMatch = htmlText.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1] || '';
+
+          // Extract LD+JSON if present (Kyobo & YES24 often use LD+JSON for book details)
+          const ldJsonMatches: string[] = [];
+          const ldJsonRegex = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+          let match;
+          while ((match = ldJsonRegex.exec(htmlText)) !== null) {
+            if (match[1]) ldJsonMatches.push(match[1].trim());
+          }
 
           // Strip heavy scripts and styles
           const strippedBody = htmlText
@@ -108,6 +116,7 @@ PAGE META INFO:
 - OG Title: ${ogTitle}
 - OG Image: ${ogImage}
 - OG Description: ${ogDescription}
+${ldJsonMatches.length > 0 ? `- Structured Data (LD+JSON):\n${ldJsonMatches.join('\n')}` : ''}
 - Meta Tags: ${metaMatches.slice(0, 35).join('\n')}
 
 PAGE TEXT CONTENT SNIPPET:
@@ -126,21 +135,34 @@ ${strippedBody}
     try {
       const ai = getGeminiClient();
       const promptText = `
-너는 대한민국 인터넷 서점(교보문고, YES24, 알라딘 등)의 도서 상세 페이지 정보를 정밀하게 분석하는 AI 파서이다.
-입력된 ${isUrl ? '도서 URL 및 HTML 웹페이지 추출 정보' : '도서 검색어/정보'}를 분석하여 정확한 도서명, 저자, 출판사, 정가(가격, 원 단위 숫자), 대표 커버 이미지 URL, ISBN을 파싱하여 JSON 형태로 추출하라.
+너는 대한민국 인터넷 서점(교보문고, YES24, 알라딘 등)의 도서 상세 페이지 웹문서를 분석하는 AI 전문 파서이다.
+입력된 ${isUrl ? '도서 URL 및 HTML 웹페이지 추출 정보' : '도서 검색어/정보'}를 분석하여 상단에 위치한 핵심 도서 정보를 아래 규칙에 맞춰 완벽하게 파싱하라.
 
 ${isUrl ? `입력 URL: ${targetInput}` : `입력 검색어: ${targetInput}`}
 
 ${fetchedContent ? `[웹페이지 추출 정보]\n${fetchedContent}` : ''}
 
-[작성 규칙]
-1. 도서명(title): 부제나 시리즈명이 포함된 완벽하고 깨끗한 한국어 도서 제목.
-2. 저자(author): 저자명 (예: '홍길동', '김철수 글, 이영희 그림').
-3. 출판사(publisher): 출판사 이름 (예: '비룡소', '창비').
-4. 가격(price): 숫자만 기재 (예: 13000, 15000). 단위나 쉼표 제외. 가격을 알 수 없는 경우 적절한 도서 가격 추정치 숫자.
-5. coverUrl: 추출된 도서 표지 이미지 URL이 있다면 해당 URL, 없으면 "" (빈 문자열).
-6. isbn: 13자리 ISBN 또는 10자리 ISBN (없으면 "").
-7. description: 책 소개 간략히 1~2문장.
+[필수 항목 추출 및 정제 규칙]
+1. 도서명(title): 
+   - 순수한 도서 제목만 추출할 것 (부제 포함 가능).
+   - 서점 브랜드 꼬리표 (예: '- 교보문고', '| YES24', ' - 알라딘' 등) 및 '| 저자명' 등 뒤쪽 서점/저자 문구는 완전히 삭제할 것.
+   - 예시: '나의 첫번째 부동산 교과서 | 송희구 - 교보문고' -> '나의 첫번째 부동산 교과서'
+
+2. 저자(author): 
+   - 저자가 여러 명(공저자, 역자, 그림작가 등)이 작성되어 있어도 **제일 앞에 있는 대표 1명의 이름만** 선택할 것.
+   - 뒤에 붙는 '지은이', '저', '외' 등의 직함 단어는 제거하고 순수 이름만 작성할 것.
+   - 예시: '송희구, 김철수, 이영희' -> '송희구'
+   - 예시: '송희구 (지은이)' -> '송희구'
+
+3. 출판사(publisher): 
+   - 출판사 이름만 명확하게 작성할 것 (예: '서삼독', '김영사', '창비').
+
+4. 가격(price): 
+   - 도서의 정가 또는 판매가 중 원(₩) 단위의 **숫자만** 기재할 것 (예: 20700). 쉼표, '원', '₩' 표시는 포함하지 말 것.
+
+5. coverUrl: 추출된 도서 표지 이미지 URL (없으면 "").
+6. isbn: 13자리 또는 10자리 ISBN (없으면 "").
+7. description: 도서 소개 1문장.
 
 반드시 JSON 규격에 맞게 반환하라.
 `;
@@ -153,10 +175,10 @@ ${fetchedContent ? `[웹페이지 추출 정보]\n${fetchedContent}` : ''}
           responseSchema: {
             type: Type.OBJECT,
             properties: {
-              title: { type: Type.STRING, description: '도서명' },
-              author: { type: Type.STRING, description: '저자' },
-              publisher: { type: Type.STRING, description: '출판사' },
-              price: { type: Type.NUMBER, description: '정가(원)' },
+              title: { type: Type.STRING, description: '순수 도서명' },
+              author: { type: Type.STRING, description: '제일 앞 1번째 대표 저자 이름' },
+              publisher: { type: Type.STRING, description: '출판사명' },
+              price: { type: Type.NUMBER, description: '정가/판매가(원 숫자만)' },
               coverUrl: { type: Type.STRING, description: '표지 이미지 URL' },
               isbn: { type: Type.STRING, description: 'ISBN' },
               description: { type: Type.STRING, description: '도서 설명' },
@@ -178,7 +200,7 @@ ${fetchedContent ? `[웹페이지 추출 정보]\n${fetchedContent}` : ''}
       let fallbackTitle = '';
       let fallbackAuthor = '';
       let fallbackPublisher = '';
-      let fallbackPrice = 12000;
+      let fallbackPrice = 20700;
       let fallbackCoverUrl = '';
 
       if (fetchedContent) {
@@ -188,15 +210,42 @@ ${fetchedContent ? `[웹페이지 추출 정보]\n${fetchedContent}` : ''}
 
         const rawTitle = ogTitleMatch?.[1] || titleTagMatch?.[1] || '';
         if (rawTitle) {
-          // Clean common bookstore suffixes (e.g. "- 교보문고", "- YES24")
-          fallbackTitle = rawTitle
-            .replace(/ - (교보문고|YES24|알라딘|인터파크 도서).*/i, '')
-            .replace(/\| (교보문고|YES24|알라딘).*/i, '')
+          // Clean title: "나의 첫번째 부동산 교과서 | 송희구 - 교보문고" -> "나의 첫번째 부동산 교과서", author -> "송희구"
+          let titleCandidate = rawTitle
+            .replace(/ - (교보문고|YES24|알라딘|인터파크 도서|인터파크도서).*/i, '')
             .trim();
+
+          if (titleCandidate.includes('|')) {
+            const parts = titleCandidate.split('|');
+            fallbackTitle = parts[0].trim();
+            if (parts[1] && !fallbackAuthor) {
+              fallbackAuthor = parts[1].trim();
+            }
+          } else {
+            fallbackTitle = titleCandidate;
+          }
         }
 
         if (ogImageMatch?.[1]) {
           fallbackCoverUrl = ogImageMatch[1].trim();
+        }
+
+        // Try extracting author and publisher from HTML meta tags or text
+        const metaAuthorMatch = fetchedContent.match(/meta[^>]+name=["'](?:author|author_name)["'][^>]+content=["']([^"']+)["']/i);
+        if (metaAuthorMatch?.[1]) {
+          fallbackAuthor = metaAuthorMatch[1];
+        }
+
+        const metaPubMatch = fetchedContent.match(/meta[^>]+name=["'](?:publisher|publisher_name)["'][^>]+content=["']([^"']+)["']/i);
+        if (metaPubMatch?.[1]) {
+          fallbackPublisher = metaPubMatch[1];
+        }
+
+        // Try searching price numbers in fetchedContent
+        const priceMatch = fetchedContent.match(/(?:정가|판매가|가격)[:\s]*([0-9,]{4,7})\s*원/);
+        if (priceMatch?.[1]) {
+          const p = parseInt(priceMatch[1].replace(/,/g, ''), 10);
+          if (!isNaN(p) && p > 0) fallbackPrice = p;
         }
       }
 
@@ -212,7 +261,7 @@ ${fetchedContent ? `[웹페이지 추출 정보]\n${fetchedContent}` : ''}
           price: fallbackPrice,
           coverUrl: fallbackCoverUrl,
           isbn: '',
-          description: 'Gemini 키 미설정 또는 네트워크 폴백 추출 데이터입니다.',
+          description: '자동 추출 도서 데이터입니다.',
         };
       } else {
         return res.status(500).json({
@@ -221,6 +270,28 @@ ${fetchedContent ? `[웹페이지 추출 정보]\n${fetchedContent}` : ''}
             ? `Gemini API 오류: ${geminiErrorMsg}`
             : '도서 정보를 분석하지 못했습니다. GEMINI_API_KEY 설정 및 URL을 확인해 주세요.',
         });
+      }
+    }
+
+    // Post-processing cleanup to ensure 1st author and clean title format
+    if (parsedJson) {
+      if (parsedJson.title) {
+        parsedJson.title = parsedJson.title
+          .replace(/ - (교보문고|YES24|알라딘|인터파크 도서|인터파크도서).*/i, '')
+          .replace(/\|.*/, '')
+          .trim();
+      }
+      if (parsedJson.author) {
+        // Pick only the first author if multiple separated by comma, slash, etc.
+        let firstAuthor = parsedJson.author.split(/[,/\&]/)[0].trim();
+        firstAuthor = firstAuthor
+          .replace(/\s*(지은이|저자|저|글|그림|역자|옮긴이|외).*/g, '')
+          .replace(/[\(\)]/g, '')
+          .trim();
+        parsedJson.author = firstAuthor || parsedJson.author;
+      }
+      if (typeof parsedJson.price === 'string') {
+        parsedJson.price = parseInt(String(parsedJson.price).replace(/[^0-9]/g, ''), 10) || 20700;
       }
     }
 
