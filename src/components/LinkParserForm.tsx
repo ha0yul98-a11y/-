@@ -76,46 +76,32 @@ export const LinkParserForm: React.FC<Props> = ({
     // Fallback parser function for when API fails or is offline
     const applyFallbackParsing = (customMsg?: string) => {
       let guessedTitle = '';
-      let guessedPublisher = '';
       const isUrl = rawInput.startsWith('http://') || rawInput.startsWith('https://');
 
       if (isUrl) {
-        if (rawInput.includes('kyobobook')) {
-          guessedPublisher = '교보문고';
-        } else if (rawInput.includes('yes24')) {
-          guessedPublisher = 'YES24';
-        } else if (rawInput.includes('aladin')) {
-          guessedPublisher = '알라딘';
-        }
-
-        // Try extracting title from URL path or query params
+        // Try extracting human-readable title from URL path or query params
         try {
           const parsedUrlObj = new URL(rawInput);
           const pathSegments = parsedUrlObj.pathname.split('/').filter(Boolean);
           const lastSegment = pathSegments[pathSegments.length - 1] || '';
-          if (lastSegment && !/^\d+$/.test(lastSegment)) {
+          // Ignore alphanumeric product codes like S000000620195 or 123456
+          if (lastSegment && !/^S?\d+$/i.test(lastSegment)) {
             guessedTitle = decodeURIComponent(lastSegment).replace(/[-_]/g, ' ');
           }
         } catch {
           // Ignore URL parse error
         }
-
-        if (!guessedTitle) {
-          guessedTitle = '링크 도서 (저자/출판사 직접 입력)';
-        }
       } else {
         guessedTitle = rawInput;
       }
 
-      setTitle(guessedTitle);
-      if (guessedPublisher && !publisher) setPublisher(guessedPublisher);
-      if (!price) setPrice(12000);
+      if (guessedTitle) setTitle(guessedTitle);
       setSourceUrl(rawInput);
 
       onShowToast(
         'info',
-        '도서 정보 입력 준비',
-        customMsg || 'URL 링크 정보가 수집되었습니다. 저자, 출판사, 가격을 확인한 뒤 [추가하기]를 눌러주세요.'
+        '도서 정보 입력 안내',
+        customMsg || '링크에서 상세 도서 정보를 직접 입력 또는 확인해 주세요.'
       );
     };
 
